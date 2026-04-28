@@ -1,7 +1,6 @@
 # Implicit Bias of Adam vs. SGD: Margin Geometry, Simplicity Bias, and Spurious Correlations
 
-**APPM 5490: Theory of Machine Learning — Final Project — Spring 2026**  
-**University of Colorado Boulder | Prof. Stephen Becker**  
+**University of Colorado Boulder**  
 **Author: Vishwas K.**
 
 ---
