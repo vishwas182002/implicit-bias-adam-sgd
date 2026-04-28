@@ -1,0 +1,691 @@
+\documentclass{article}
+\usepackage[final]{neurips_2024}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{float}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\title{Implicit Bias of Adam vs.\ SGD:\\Margin Geometry, Simplicity Bias, and Spurious Correlations}
+
+\author{
+  Vishwas K.\\
+  Department of Applied Mathematics\\
+  University of Colorado Boulder\\
+  \texttt{vishwas.k@colorado.edu}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+The choice of optimizer in training machine learning models determines not just convergence speed but the \emph{type} of solution found among the many global minimizers of overparameterized models. We present a unified theoretical and empirical study of the implicit bias of gradient descent (GD) and Adam. Our theoretical exposition covers three recent results: (1) Soudry et al.\ (2018) prove that GD on the logistic loss converges in direction to the $\ell_2$-max-margin classifier via a four-step argument involving support vector dominance and logarithmic norm growth; (2) Zhang et al.\ (2024) prove that full-batch Adam converges to the $\ell_\infty$-max-margin classifier through a connection between Adam's coordinate-wise normalization and steepest descent in the $\ell_\infty$ norm; and (3) Vasudeva et al.\ (NeurIPS 2025) show that this geometric difference causes SGD to exhibit simplicity bias while Adam learns richer features. We verify these predictions through two experiments. In Experiment~1 (synthetic margin convergence), GD achieves $0.990 \pm 0.003$ cosine similarity with the exact $\ell_2$-max-margin solution and Adam achieves $0.988 \pm 0.003$ with the exact $\ell_\infty$ solution, across 5 independent dataset seeds. In Experiment~2 (MNIST with spurious colored patch), SGD's out-of-distribution accuracy drops by 30.2\% when the spurious correlation is flipped, compared to only 13.6\% for Adam, with SGD showing $3\times$ higher reliance on the spurious feature. Our results demonstrate that optimizer choice is a design decision that shapes what a model learns, not merely how fast it learns.
+\end{abstract}
+
+%=============================================================
+\section{Introduction}
+\label{sec:intro}
+%=============================================================
+
+A central puzzle in modern machine learning theory is why overparameterized models---those with far more parameters than training samples---generalize well despite their capacity to memorize arbitrary labels~\cite{zhang2017understanding}. Classical statistical learning theory, as developed through the PAC framework, VC dimension, and Rademacher complexity bounds covered in this course, predicts that such models should overfit catastrophically. Yet in practice, neural networks trained with gradient-based methods achieve excellent test performance without any explicit regularization.
+
+The resolution to this puzzle lies in the \emph{implicit bias} of the optimization algorithm. When the training loss has multiple (often infinitely many) global minimizers---as is the case in overparameterized settings---the optimizer does not find an arbitrary minimizer. Instead, it finds a \emph{specific} one, determined by the geometry of the optimization algorithm itself. Different optimizers impose different inductive biases, leading to qualitatively different solutions with different generalization properties.
+
+This observation has profound practical implications. Practitioners routinely choose between SGD and Adam based on convergence speed and ease of hyperparameter tuning. Our project demonstrates that this choice has a deeper consequence: it determines the \emph{type of features} the model learns, and consequently, its robustness to distribution shift.
+
+\paragraph{Contributions.} This project makes the following contributions:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Unified theoretical exposition.} We present a self-contained treatment of three recent results---Soudry et al.\ (2018), Zhang et al.\ (2024), and Vasudeva et al.\ (NeurIPS 2025)---connected through the steepest descent framework and grounded in the Rademacher margin bounds from this course (Section~\ref{sec:theory}).
+    
+    \item \textbf{Margin convergence verification.} We empirically verify that GD and Adam converge to $\ell_2$ and $\ell_\infty$ max-margin directions respectively, using exact reference solutions computed via convex programming, with results consistent across 5 independent dataset seeds (Section~\ref{sec:exp1}).
+    
+    \item \textbf{Simplicity bias demonstration.} We demonstrate on a controlled MNIST benchmark that the margin geometry difference leads to SGD relying $3\times$ more on spurious features than Adam, with a 17-percentage-point gap in out-of-distribution accuracy (Section~\ref{sec:exp2}).
+\end{enumerate}
+
+\paragraph{Organization.} Section~\ref{sec:theory} presents the theoretical framework, including detailed proof mechanisms for both margin convergence results and the simplicity bias analysis. Section~\ref{sec:exp1} describes Experiment~1 (margin convergence). Section~\ref{sec:exp2} describes Experiment~2 (spurious correlations). Section~\ref{sec:discussion} discusses findings, limitations, and connections to course material. Section~\ref{sec:conclusion} concludes.
+
+%=============================================================
+\section{Theoretical Framework}
+\label{sec:theory}
+%=============================================================
+
+%-------------------------------------------------------------
+\subsection{Preliminaries and Notation}
+\label{sec:prelim}
+%-------------------------------------------------------------
+
+Consider a binary classification problem with training data $\{(x_i, y_i)\}_{i=1}^n$ where $x_i \in \mathbb{R}^d$ and $y_i \in \{-1, +1\}$. We train a linear classifier $f(x; \theta) = \theta^\top x$ by minimizing the unregularized logistic loss:
+\begin{equation}
+    L(\theta) = \frac{1}{n} \sum_{i=1}^n \ell(y_i \theta^\top x_i), \quad \text{where } \ell(z) = \log(1 + e^{-z}).
+    \label{eq:logistic_loss}
+\end{equation}
+
+The function $\ell(z) = \log(1 + e^{-z})$ is the logistic loss, which is convex, monotonically decreasing, and satisfies $\ell(z) \to 0$ as $z \to \infty$ (exponentially fast) and $\ell(z) \approx -z$ as $z \to -\infty$.
+
+\begin{definition}[$\ell_p$-Margin]
+The $\ell_p$-margin of a classifier $\theta$ on the dataset is:
+\begin{equation}
+    \gamma_p(\theta) = \min_{i=1,\ldots,n} \frac{y_i \theta^\top x_i}{\|\theta\|_p}.
+\end{equation}
+This measures the worst-case normalized distance from any training point to the decision boundary, where normalization is in the $\ell_p$ norm.
+\end{definition}
+
+\begin{definition}[$\ell_p$-Max-Margin Classifier]
+\label{def:maxmargin}
+The $\ell_p$-max-margin classifier is the solution to:
+\begin{equation}
+    \hat{\theta}_p = \arg\max_{\theta} \gamma_p(\theta) = \arg\max_{\|\theta\|_p \leq 1} \min_{i=1,\ldots,n} y_i \theta^\top x_i.
+    \label{eq:max_margin}
+\end{equation}
+\end{definition}
+
+For $p = 2$, this is the well-known hard-margin SVM, which can be formulated as a quadratic program (QP):
+\begin{equation}
+    \hat{\theta}_2 = \arg\min_\theta \frac{1}{2}\|\theta\|_2^2 \quad \text{s.t.} \quad y_i \theta^\top x_i \geq 1, \quad \forall i.
+    \label{eq:l2_qp}
+\end{equation}
+
+For $p = \infty$, the max-margin problem becomes a linear program (LP):
+\begin{equation}
+    \hat{\theta}_\infty = \arg\max_{\gamma, \theta} \gamma \quad \text{s.t.} \quad y_i \theta^\top x_i \geq \gamma, \quad \|\theta\|_\infty \leq 1.
+    \label{eq:linf_lp}
+\end{equation}
+
+Table~\ref{tab:comparison} summarizes the key differences between the two margin types.
+
+\begin{table}[h]
+\centering
+\caption{Comparison of $\ell_2$ and $\ell_\infty$ max-margin problems.}
+\label{tab:comparison}
+\begin{tabular}{lcc}
+\toprule
+Property & $\ell_2$-Max-Margin (GD) & $\ell_\infty$-Max-Margin (Adam) \\
+\midrule
+Formulation & Quadratic program & Linear program \\
+Constraint set & $\|\theta\|_2 \leq 1$ (ball) & $\|\theta\|_\infty \leq 1$ (hypercube) \\
+Dual norm (data radius) & $\ell_2$: $R = \max_i\|x_i\|_2$ & $\ell_1$: $R = \max_i\|x_i\|_1$ \\
+Solution geometry & Concentrates on few features & Spreads across all features \\
+KKT structure & Few support vectors & Potentially many active constraints \\
+Optimizer & Gradient descent & Adam (sign descent) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{definition}[Steepest Descent]
+\label{def:steepest}
+The steepest descent direction with respect to norm $\|\cdot\|_p$ at point $\theta$ is:
+\begin{equation}
+    d_p(\theta) = \arg\min_{\|d\|_p \leq 1} \langle \nabla L(\theta), d \rangle.
+    \label{eq:steepest}
+\end{equation}
+This is the direction of maximum decrease in $L$ per unit step measured in the $\ell_p$ norm.
+\end{definition}
+
+\begin{proposition}[Steepest Descent in $\ell_2$ and $\ell_\infty$]
+\label{prop:steepest}
+\begin{enumerate}[leftmargin=*]
+    \item For $p = 2$: $d_2(\theta) = -\nabla L(\theta) / \|\nabla L(\theta)\|_2$. \textbf{Proof:} By Cauchy-Schwarz, $\langle g, d \rangle \geq -\|g\|_2 \|d\|_2 \geq -\|g\|_2$ when $\|d\|_2 \leq 1$, with equality when $d = -g/\|g\|_2$.
+    
+    \item For $p = \infty$: $d_\infty(\theta) = -\text{sign}(\nabla L(\theta))$. \textbf{Proof:} We need to minimize $\sum_j g_j d_j$ subject to $\max_j |d_j| \leq 1$. Since each coordinate is independently constrained to $[-1, 1]$, the minimum is achieved by setting $d_j = -\text{sign}(g_j)$ for each $j$, giving $\langle g, d \rangle = -\sum_j |g_j| = -\|g\|_1$. This is the minimum because for any $d$ with $\|d\|_\infty \leq 1$, $\langle g, d \rangle = \sum_j g_j d_j \geq -\sum_j |g_j||d_j| \geq -\sum_j |g_j| = -\|g\|_1$.
+\end{enumerate}
+\end{proposition}
+
+This proposition is central to the entire project: it establishes that standard gradient descent performs steepest descent in $\ell_2$, while sign descent performs steepest descent in $\ell_\infty$. Since Adam approximates sign descent (as we show below), this connects Adam to $\ell_\infty$ geometry.
+
+%-------------------------------------------------------------
+\subsection{Theorem 1: GD Converges to the $\ell_2$-Max-Margin Direction}
+\label{sec:soudry}
+%-------------------------------------------------------------
+
+\begin{theorem}[Soudry et al., 2018~\cite{soudry2018}]
+\label{thm:soudry}
+Assume the training data $\{(x_i, y_i)\}_{i=1}^n$ is linearly separable. Consider gradient descent on the logistic loss~\eqref{eq:logistic_loss} with a sufficiently small fixed learning rate $\eta > 0$, initialized at any $\theta(0) \in \mathbb{R}^d$:
+\begin{equation}
+    \theta(t+1) = \theta(t) - \eta \nabla L(\theta(t)).
+\end{equation}
+Then:
+\begin{enumerate}
+    \item The loss converges to zero: $L(\theta(t)) \to 0$.
+    \item The parameter norm diverges logarithmically: $\|\theta(t)\|_2 = O(\log t)$.
+    \item The direction converges to the SVM solution:
+    \begin{equation}
+        \lim_{t \to \infty} \frac{\theta(t)}{\|\theta(t)\|_2} = \frac{\hat{\theta}_2}{\|\hat{\theta}_2\|_2}.
+    \end{equation}
+\end{enumerate}
+\end{theorem}
+
+\paragraph{Detailed proof mechanism.} We present the proof in four steps, following the structure of Soudry et al.
+
+\textbf{Step 1: The iterates must diverge ($\|\theta(t)\| \to \infty$).}
+
+Since the data is separable, there exists $\theta^*$ with $y_i \theta^{*\top} x_i > 0$ for all $i$. For any $\theta$ satisfying this, consider scaling: $L(\alpha \theta) = \frac{1}{n}\sum_i \log(1 + e^{-\alpha y_i \theta^\top x_i})$. As $\alpha \to \infty$, each term goes to zero because $y_i \theta^\top x_i > 0$. Therefore $\inf_\theta L(\theta) = 0$.
+
+However, $L(\theta) = 0$ cannot be achieved at any \emph{finite} $\theta$: since $\log(1 + e^{-z}) > 0$ for all finite $z$, every term in the sum is strictly positive. Thus $L(\theta) > 0$ for all $\theta \in \mathbb{R}^d$, and the infimum is not attained.
+
+Since GD monotonically decreases $L(\theta(t))$ (for small enough $\eta$) and drives it toward 0, the iterates cannot remain bounded---they must diverge to push all margins toward infinity.
+
+\textbf{Step 2: Support vectors dominate the gradient.}
+
+The gradient of the logistic loss is:
+\begin{equation}
+    \nabla L(\theta) = -\frac{1}{n} \sum_{i=1}^n y_i x_i \cdot \sigma(-\gamma_i(\theta)),
+    \label{eq:gradient}
+\end{equation}
+where $\gamma_i(\theta) = y_i \theta^\top x_i$ is the margin on sample $i$, and $\sigma(z) = 1/(1+e^{-z})$ is the sigmoid function.
+
+The key observation is the behavior of $\sigma(-\gamma_i)$ as margins grow:
+\begin{equation}
+    \sigma(-\gamma_i) = \frac{1}{1 + e^{\gamma_i}} \approx e^{-\gamma_i} \quad \text{for large } \gamma_i > 0.
+\end{equation}
+
+This means the contribution of sample $i$ to the gradient decays \emph{exponentially} with its margin. Samples with large margins (easy, well-classified points) contribute negligibly to the gradient. Samples with the \emph{smallest} margins---the \emph{support vectors}---dominate.
+
+Let $\mathcal{S} = \{i : \gamma_i(\hat{\theta}_2) = \gamma^*\}$ be the set of support vectors (samples achieving the minimum margin under the SVM solution). As $t \to \infty$:
+\begin{equation}
+    \nabla L(\theta(t)) \approx -\frac{1}{n} \sum_{i \in \mathcal{S}} y_i x_i \cdot e^{-\gamma_i(\theta(t))}.
+\end{equation}
+
+\textbf{Step 3: Decomposition into SVM and residual components.}
+
+Write $\theta(t) = \alpha(t) \hat{\theta}_2 + \rho(t)$, where $\alpha(t) = \langle \theta(t), \hat{\theta}_2 \rangle / \|\hat{\theta}_2\|_2^2$ is the projection onto the SVM direction and $\rho(t)$ is the orthogonal residual.
+
+The gradient, dominated by support vectors, points approximately in the direction of $\hat{\theta}_2$. This is because the KKT conditions of the SVM state:
+\begin{equation}
+    \hat{\theta}_2 = \sum_{i \in \mathcal{S}} \lambda_i y_i x_i, \quad \lambda_i \geq 0,
+\end{equation}
+i.e., the SVM solution is a positive combination of the support vectors. Since the gradient is also a weighted combination of the same support vectors (with weights $e^{-\gamma_i}$), it points approximately in the $\hat{\theta}_2$ direction.
+
+The technical argument then shows:
+\begin{itemize}[leftmargin=*]
+    \item $\alpha(t)$ grows as $O(\log t)$, because the gradient component along $\hat{\theta}_2$ decreases as $O(e^{-c\alpha(t)})$, and summing $\Delta\alpha(t) \propto e^{-c\alpha(t)}$ gives logarithmic growth (like the harmonic series).
+    \item $\|\rho(t)\|$ remains bounded, because the gradient components orthogonal to $\hat{\theta}_2$ decay even faster (they correspond to non-support-vector directions).
+\end{itemize}
+
+\textbf{Step 4: Directional convergence follows.}
+
+Since $\alpha(t) \to \infty$ and $\|\rho(t)\| \leq C$ for some constant $C$:
+\begin{equation}
+    \frac{\theta(t)}{\|\theta(t)\|_2} = \frac{\alpha(t) \hat{\theta}_2 + \rho(t)}{\|\alpha(t) \hat{\theta}_2 + \rho(t)\|_2} \xrightarrow{t \to \infty} \frac{\hat{\theta}_2}{\|\hat{\theta}_2\|_2}.
+\end{equation}
+The convergence rate is $O(1/\log t)$, which is very slow---but the \emph{direction} converges even though the \emph{parameters} diverge.
+
+\paragraph{Intuition.} The logistic loss acts as a smooth surrogate for the hinge loss used in SVMs. As the margins grow and the loss approaches zero, the optimization landscape increasingly resembles the SVM objective, and gradient descent naturally finds the SVM solution. The implicit bias is toward $\ell_2$-margin maximization because GD performs steepest descent in the $\ell_2$ norm (Proposition~\ref{prop:steepest}).
+
+%-------------------------------------------------------------
+\subsection{Theorem 2: Adam Converges to the $\ell_\infty$-Max-Margin Direction}
+\label{sec:adam}
+%-------------------------------------------------------------
+
+\begin{theorem}[Zhang, Zou, and Cao, 2024~\cite{zhang2024}]
+\label{thm:adam}
+For linearly separable data, full-batch Adam (with $\epsilon = 0$) on the logistic loss~\eqref{eq:logistic_loss} with appropriate hyperparameters satisfies:
+\begin{equation}
+    \lim_{t \to \infty} \frac{\theta(t)}{\|\theta(t)\|_\infty} = \frac{\hat{\theta}_\infty}{\|\hat{\theta}_\infty\|_\infty},
+\end{equation}
+where $\hat{\theta}_\infty$ is the $\ell_\infty$-max-margin classifier defined in Equation~\eqref{eq:linf_lp}.
+\end{theorem}
+
+\paragraph{Proof mechanism: Adam as approximate sign descent.}
+
+The Adam optimizer maintains two exponential moving averages for each coordinate $j$:
+\begin{align}
+    m_j^{(t)} &= \beta_1 m_j^{(t-1)} + (1-\beta_1) g_j^{(t)}, \label{eq:adam_m} \\
+    v_j^{(t)} &= \beta_2 v_j^{(t-1)} + (1-\beta_2) (g_j^{(t)})^2, \label{eq:adam_v}
+\end{align}
+where $g_j^{(t)} = \partial L / \partial \theta_j$ is the gradient at step $t$. The parameter update is:
+\begin{equation}
+    \theta_j^{(t+1)} = \theta_j^{(t)} - \eta \frac{m_j^{(t)}}{\sqrt{v_j^{(t)}} + \epsilon}.
+    \label{eq:adam_update}
+\end{equation}
+
+The division by $\sqrt{v_j^{(t)}}$ is the crucial operation. Consider what happens when $\epsilon = 0$ and the moving averages have converged (i.e., the gradient is approximately constant across recent steps):
+\begin{equation}
+    \frac{m_j^{(t)}}{\sqrt{v_j^{(t)}}} \approx \frac{g_j^{(t)}}{\sqrt{(g_j^{(t)})^2}} = \frac{g_j^{(t)}}{|g_j^{(t)}|} = \text{sign}(g_j^{(t)}).
+\end{equation}
+
+Therefore, Adam's update becomes:
+\begin{equation}
+    \theta^{(t+1)} \approx \theta^{(t)} - \eta \cdot \text{sign}(\nabla L(\theta^{(t)})).
+    \label{eq:sign_descent}
+\end{equation}
+
+This is exactly \emph{sign descent}, which by Proposition~\ref{prop:steepest} is steepest descent in the $\ell_\infty$ norm.
+
+\paragraph{From steepest descent to max-margin.} The unifying principle connecting both theorems is:
+
+\begin{center}
+\fbox{\parbox{0.85\textwidth}{\centering
+\textbf{Steepest descent in norm $\|\cdot\|_p$ on the logistic loss with separable data\\converges in direction to the $\ell_p$-max-margin classifier.}
+}}
+\end{center}
+
+This principle, formalized by Gunasekar et al.~\cite{gunasekar2018}, explains both results:
+\begin{itemize}[leftmargin=*]
+    \item GD = steepest descent in $\ell_2$ $\implies$ converges to $\ell_2$-max-margin.
+    \item Adam $\approx$ sign descent = steepest descent in $\ell_\infty$ $\implies$ converges to $\ell_\infty$-max-margin.
+\end{itemize}
+
+\paragraph{Why the KKT conditions differ.} The $\ell_2$-max-margin problem~\eqref{eq:l2_qp} is a QP whose KKT conditions give $\hat{\theta}_2 = \sum_i \lambda_i y_i x_i$ with most $\lambda_i = 0$ (only support vectors have $\lambda_i > 0$). This means $\hat{\theta}_2$ is a sparse combination of data points, concentrating weight on a few directions.
+
+The $\ell_\infty$-max-margin problem~\eqref{eq:linf_lp} is an LP. At the optimal solution, the constraint $\|\theta\|_\infty \leq 1$ is typically active on \emph{multiple} coordinates---meaning many coordinates hit $\pm 1$. This forces the solution to use many features with equal magnitude, spreading weight across coordinates rather than concentrating it.
+
+\paragraph{Technical assumptions.} Theorem~\ref{thm:adam} requires: (i) full-batch gradient computation (not stochastic); (ii) $\epsilon = 0$ in the Adam update; (iii) linear separability; (iv) appropriate step size. In practice, stochastic Adam with $\epsilon > 0$ may not exactly converge to the $\ell_\infty$ solution, but the qualitative bias toward sign descent and $\ell_\infty$ geometry persists.
+
+%-------------------------------------------------------------
+\subsection{Simplicity Bias: SGD Learns Simple Features, Adam Learns Rich Features}
+\label{sec:simplicity}
+%-------------------------------------------------------------
+
+The margin convergence results (Theorems~\ref{thm:soudry} and~\ref{thm:adam}) are proven for linear models. Vasudeva et al.~\cite{vasudeva2025} extend the analysis to neural networks, showing that the different margin geometries lead to qualitatively different \emph{feature learning} behavior.
+
+\paragraph{Setup.} Consider a two-layer ReLU network:
+\begin{equation}
+    f(W; x) = a^\top \sigma(Wx),
+\end{equation}
+where $W \in \mathbb{R}^{m \times d}$ is the trainable weight matrix, $a \in \mathbb{R}^m$ is a \emph{fixed} output layer (random $\pm 1$ signs, not trained), $\sigma(\cdot) = \max(0, \cdot)$ is the ReLU activation, and $m \gg d$ (overparameterized). The network is trained from small random initialization ($\|W(0)\| = O(\alpha)$ with $\alpha \ll 1$).
+
+\paragraph{Population gradient analysis.} The key theoretical tool is the \emph{population gradient}---the expected gradient over the data distribution $\mathcal{D}$:
+\begin{equation}
+    \nabla_W L_{\text{pop}}(W) = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ \nabla_W \ell(y \cdot f(W; x)) \right].
+\end{equation}
+
+Vasudeva et al.\ analyze this population gradient for data drawn from a mixture of Gaussians with clustered structure. Their key findings:
+
+\textbf{Under GD:} The population gradient update for each row $w_k$ of $W$ takes the form:
+\begin{equation}
+    w_k \leftarrow w_k - \eta \cdot \mathbb{E}\left[ y \cdot a_k \cdot x \cdot \mathbf{1}[w_k^\top x > 0] \cdot \sigma'(y \cdot f(W;x)) \right].
+\end{equation}
+When the data has multiple clusters, this expectation averages over the cluster structure, causing different rows of $W$ to learn similar directions. The result is that $W$ collapses onto a low-rank subspace---effectively, the network learns a \emph{linear} decision boundary based on the cluster means. This is \emph{simplicity bias}: GD finds the simplest feature (the direction separating the cluster means) even when a more complex feature (the cluster structure itself) would yield a better boundary.
+
+\textbf{Under Adam:} The coordinate-wise normalization in Adam prevents this collapse. By dividing each coordinate of the gradient by its historical magnitude, Adam equalizes the influence of different feature directions. Directions that receive small gradients (because they correspond to subtle features) are amplified rather than suppressed. The result is that $W$ maintains higher rank, and the network learns a \emph{nonlinear} decision boundary that captures the cluster structure, closer to the Bayes-optimal predictor.
+
+\paragraph{Consequence for spurious correlations.} Consider data where the label can be predicted by either a simple feature $s$ (e.g., color) or a complex feature $c$ (e.g., shape), and $s$ is spuriously correlated with the label in training but not in general:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{SGD/GD:} Simplicity bias causes the model to learn primarily $s$ (the simpler feature), achieving high training accuracy but failing when the spurious correlation is broken at test time.
+    \item \textbf{Adam:} The richer feature learning causes the model to learn \emph{both} $s$ and $c$. When $s$ becomes unreliable, the model can fall back on $c$, maintaining better out-of-distribution performance.
+\end{itemize}
+
+%-------------------------------------------------------------
+\subsection{Connection to Course Generalization Bounds}
+\label{sec:bounds}
+%-------------------------------------------------------------
+
+The implicit bias results connect directly to the Rademacher complexity-based margin bounds from this course (Shalev-Shwartz and Ben-David, Ch.\ 26; Mohri et al., Ch.\ 5).
+
+\begin{theorem}[Margin-Based Generalization Bound]
+\label{thm:margin_bound}
+Let $\mathcal{H} = \{x \mapsto \theta^\top x : \|\theta\|_p \leq \Lambda\}$ be a linear hypothesis class. For data with $\|x_i\|_q \leq R$ (where $1/p + 1/q = 1$), a classifier with margin $\gamma > 0$ satisfies:
+\begin{equation}
+    \mathcal{E}(\theta) \leq \hat{\mathcal{E}}_\gamma(\theta) + O\left(\frac{R \cdot \Lambda}{\gamma \sqrt{n}}\right) + O\left(\sqrt{\frac{\log(1/\delta)}{n}}\right),
+    \label{eq:margin_bound}
+\end{equation}
+with probability at least $1 - \delta$, where $\hat{\mathcal{E}}_\gamma$ is the empirical margin loss.
+\end{theorem}
+
+For the two margin types:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{$\ell_2$-max-margin (GD):} $p = 2$, $q = 2$, so $R = \max_i \|x_i\|_2$ and $\gamma = \gamma_2$. The bound scales as $R_2 / (\gamma_2 \sqrt{n})$.
+    \item \textbf{$\ell_\infty$-max-margin (Adam):} $p = \infty$, $q = 1$, so $R = \max_i \|x_i\|_1$ and $\gamma = \gamma_\infty$. The bound scales as $R_1 / (\gamma_\infty \sqrt{n})$.
+\end{itemize}
+
+Which bound is tighter depends on the data geometry. When features are axis-aligned and many coordinates carry small but useful information, $\|x\|_1$ can be much larger than $\|x\|_2$, but $\gamma_\infty$ may also be larger (since the $\ell_\infty$ solution uses all coordinates). In settings where the $\ell_\infty$ margin is disproportionately large, Adam's implicit bias leads to a tighter generalization bound---this is precisely the regime where Adam outperforms SGD.
+
+\paragraph{Concrete example from our Experiment 1 data.} In our synthetic dataset ($d=20$, 1 strong + 7 weak features), the exact solutions yield $\ell_2$-margin $\gamma_2 \approx 6.85$ and $\ell_\infty$-margin $\gamma_\infty \approx 7.07$. The data radii are approximately $R_2 = \max_i \|x_i\|_2 \approx 8.5$ and $R_1 = \max_i \|x_i\|_1 \approx 22.1$. The generalization bound ratios are:
+\begin{equation}
+    \frac{R_2}{\gamma_2} \approx \frac{8.5}{6.85} \approx 1.24 \quad \text{vs.} \quad \frac{R_1}{\gamma_\infty} \approx \frac{22.1}{7.07} \approx 3.13.
+\end{equation}
+In this case, the $\ell_2$ bound is tighter, suggesting GD should generalize better on this particular data geometry. This is consistent with the symmetric, isotropic-noise structure of our synthetic data. On data where many features carry small but important information (high $\gamma_\infty$ relative to $R_1$), the $\ell_\infty$ bound can become tighter.
+
+%=============================================================
+\section{Experiment 1: Margin Convergence Verification}
+\label{sec:exp1}
+%=============================================================
+
+%-------------------------------------------------------------
+\subsection{Goal}
+%-------------------------------------------------------------
+
+Directly verify the predictions of Theorems~\ref{thm:soudry} and~\ref{thm:adam}: does GD converge to the $\ell_2$-max-margin direction, and does Adam converge to the $\ell_\infty$-max-margin direction?
+
+%-------------------------------------------------------------
+\subsection{Experimental Setup}
+%-------------------------------------------------------------
+
+\paragraph{Data generation.} We generate $n = 500$ linearly separable samples in $\mathbb{R}^{20}$. The data is \emph{designed} so that the $\ell_2$ and $\ell_\infty$ max-margin solutions are meaningfully different. The class means are:
+\begin{align}
+    \mu_{+} &= (4.0, \underbrace{0.8, \ldots, 0.8}_{7}, \underbrace{0, \ldots, 0}_{12})^\top, \quad \mu_{-} = -\mu_{+}.
+\end{align}
+Coordinate 0 is a \emph{strong} discriminative feature, coordinates 1--7 are \emph{weak} discriminative features, and coordinates 8--19 are pure noise. The covariance is diagonal with standard deviations 0.5 (strong), 0.4 (weak), and 2.0 (noise).
+
+This structure forces the $\ell_2$ solution to concentrate weight on coordinate 0 (the dominant feature), while the $\ell_\infty$ solution must spread weight across coordinates 0--7 (since each coordinate is bounded by 1). Linear separability is verified using a hard-margin SVM with tolerance $>0.999$.
+
+\paragraph{Exact reference solutions.} We compute the ground-truth solutions using CVXPY~\cite{cvxpy} with the SCS solver (max iterations = 10,000). The $\ell_2$ solution is obtained via the QP~\eqref{eq:l2_qp} and the $\ell_\infty$ solution via the LP~\eqref{eq:linf_lp}. We verify solver accuracy by checking that the minimum constraint slack is $< 10^{-4}$.
+
+\paragraph{Training.} We train a linear model $f(x; \theta) = \theta^\top x$ using:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{GD:} Vanilla full-batch gradient descent with learning rate $\eta = 0.01$, zero initialization, 50,000 steps.
+    \item \textbf{Adam:} Full-batch Adam with $\eta = 0.001$, $\beta_1 = 0.9$, $\beta_2 = 0.999$, zero initialization, 50,000 steps.
+\end{itemize}
+
+The loss function uses the numerically stable softplus formulation: $L(\theta) = \frac{1}{n}\sum_i \text{softplus}(-y_i \theta^\top x_i)$, where $\text{softplus}(z) = \log(1 + e^z)$. This is mathematically equivalent to Equation~\eqref{eq:logistic_loss} but avoids numerical overflow for large margins.
+
+\paragraph{Metrics.} We save the iterate $\theta(t)$ every 100 steps and compute:
+\begin{enumerate}[leftmargin=*]
+    \item Cosine similarity $\cos(\theta(t)/\|\theta(t)\|, \hat{\theta}_p/\|\hat{\theta}_p\|)$ with both exact solutions.
+    \item Parameter norms $\|\theta(t)\|_2$ and $\|\theta(t)\|_\infty$.
+    \item Normalized per-sample margins $y_i (x_i^\top \theta/\|\theta\|_p)$ at the final iterate.
+\end{enumerate}
+
+\paragraph{Multi-seed methodology.} We repeat the experiment across 5 independent dataset seeds. Each seed generates a fresh dataset, computes fresh exact solutions, and trains both optimizers. This ensures the results are not specific to one particular random dataset.
+
+%-------------------------------------------------------------
+\subsection{Results}
+%-------------------------------------------------------------
+
+% >>> FIGURE: Insert fig1_cosine_similarity.png <<<
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/fig1_cosine_similarity.png}
+    \caption{Cosine similarity between optimizer iterates and exact max-margin solutions over training (seed 42). \textbf{Left:} Alignment with $\ell_2$ solution---GD (blue) converges to $\sim$1.0 while Adam (red) plateaus lower. \textbf{Right:} Alignment with $\ell_\infty$ solution---Adam converges to $\sim$1.0 while GD plateaus lower. X-axis is log-scaled.}
+    \label{fig:cosine}
+\end{figure}
+
+\paragraph{Training dynamics.} Both optimizers drive the training loss to near zero (GD: $1.17 \times 10^{-4}$, Adam: $< 10^{-6}$ after 50K steps), confirming that both find interpolating solutions. However, their convergence paths differ: Adam's loss decreases faster in early training due to its adaptive learning rate, while GD's loss decreases more steadily.
+
+Table~\ref{tab:exp1} summarizes the main results.
+
+\begin{table}[h]
+\centering
+\caption{Experiment 1: Final cosine similarity between optimizer iterates and exact max-margin solutions (mean $\pm$ std across 5 dataset seeds). Bold indicates the predicted (correct) alignment.}
+\label{tab:exp1}
+\begin{tabular}{lcc}
+\toprule
+& $\cos(\theta, \hat{\theta}_2)$ & $\cos(\theta, \hat{\theta}_\infty)$ \\
+\midrule
+GD & $\mathbf{0.990 \pm 0.003}$ & $0.750 \pm 0.003$ \\
+Adam & $0.846 \pm 0.015$ & $\mathbf{0.988 \pm 0.003}$ \\
+\midrule
+Between solutions: $\cos(\hat{\theta}_2, \hat{\theta}_\infty)$ & \multicolumn{2}{c}{$0.770 \pm 0.020$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% >>> FIGURE: Insert fig2_norm_growth.png <<<
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/fig2_norm_growth.png}
+    \caption{Norm growth verification. \textbf{Left:} GD $\|\theta(t)\|_2$ plotted against $\log(t)$, with a linear fit ($R^2 > 0.99$) confirming $O(\log t)$ growth as predicted by Theorem~\ref{thm:soudry}. \textbf{Right:} Adam $\|\theta(t)\|_\infty$ growth.}
+    \label{fig:norm}
+\end{figure}
+
+\paragraph{Margin convergence confirmed.} GD achieves $0.990$ cosine similarity with the $\ell_2$ solution; Adam achieves $0.988$ with the $\ell_\infty$ solution. Both are close to 1.0, indicating near-perfect directional convergence. The cross-alignments are substantially lower ($0.750$ and $0.846$), confirming that the two optimizers genuinely converge to \emph{different} directions, not slightly different versions of the same direction.
+
+\paragraph{Solutions are meaningfully different.} The cosine similarity between $\hat{\theta}_2$ and $\hat{\theta}_\infty$ is $0.770 \pm 0.020$, confirming that our data design creates a substantial geometric separation between the two margin types.
+
+\paragraph{Logarithmic norm growth.} We verify the $O(\log t)$ prediction by fitting a linear regression to $\|\theta(t)\|_2$ versus $\log(t)$ on the second half of training. The resulting $R^2 > 0.99$ across all seeds, confirming the logarithmic growth rate.
+
+\paragraph{Consistency.} Standard deviations across 5 dataset seeds are $\leq 0.003$ for the correct alignments and $\leq 0.020$ for the between-solution similarity, demonstrating robust behavior.
+
+\paragraph{Normalized margin distributions.} We examine the per-sample margin distributions at the final iterate, computed using the appropriate normalization for each optimizer: $\gamma_i = y_i x_i^\top (\theta / \|\theta\|_2)$ for GD and $\gamma_i = y_i x_i^\top (\theta / \|\theta\|_\infty)$ for Adam. The GD-normalized minimum margin is $3.059 \pm 0.000$ and the Adam-normalized minimum margin is $5.901 \pm 0.000$. The margin distributions have different shapes: GD shows a tighter concentration of margins near the minimum (consistent with the $\ell_2$-SVM support vector structure), while Adam distributes margins more evenly across samples (consistent with the $\ell_\infty$ geometry where many coordinates hit their constraints).
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/fig4_multiseed_alignment.png}
+    \caption{Multi-seed consistency: Final cosine similarities across 5 dataset seeds (mean $\pm$ std). Bright bars: correct alignment (GD$\to\ell_2$, Adam$\to\ell_\infty$). Faded bars: cross-alignment.}
+    \label{fig:multiseed}
+\end{figure}
+
+%=============================================================
+\section{Experiment 2: Simplicity Bias on MNIST with Spurious Patch}
+\label{sec:exp2}
+%=============================================================
+
+%-------------------------------------------------------------
+\subsection{Goal}
+%-------------------------------------------------------------
+
+Experiment~1 confirmed that GD and Adam converge to different margin solutions in a linear setting. Experiment~2 tests whether this theoretical difference has practical consequences: does SGD's $\ell_2$ bias cause it to rely on spurious shortcuts, and does Adam resist this?
+
+%-------------------------------------------------------------
+\subsection{Experimental Setup}
+%-------------------------------------------------------------
+
+\paragraph{Dataset: MNIST with spurious colored patch.} We construct a binary classification task from MNIST (digits 0--4 as class 0, digits 5--9 as class 1). Each grayscale image ($28 \times 28$) is converted to RGB ($3 \times 28 \times 28$), and a $10 \times 10$ colored patch is placed in the top-left corner:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Red patch} ($R=1, G=0, B=0$): placed on class 0 images with probability $p$, and on class 1 images with probability $1-p$.
+    \item \textbf{Green patch} ($R=0, G=1, B=0$): placed on class 0 images with probability $1-p$, and on class 1 images with probability $p$.
+\end{itemize}
+
+The spurious correlation strength $p$ is set differently for training and testing:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Training}: $p = 0.99$ (99\% correlation). The patch color is an almost-perfect predictor of the label---much simpler to learn than digit shape.
+    \item \textbf{ID test}: $p = 0.99$ (same as training).
+    \item \textbf{OOD test}: $p = 0.01$ (correlation flipped). Models relying on patch color will make systematic errors.
+\end{itemize}
+
+This setup creates two predictive features of vastly different complexity: the \emph{patch color} (detectable from $\sim$100 pixels, essentially a linear feature) and the \emph{digit shape} (requires learning spatial patterns across the full $28 \times 28$ image, a complex nonlinear feature).
+
+% >>> FIGURE: Insert fig9_patched_mnist_samples.png <<<
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/fig9_patched_mnist_samples.png}
+    \caption{Sample images from the MNIST spurious patch dataset. \textbf{Top row:} Training set (99\% correlation)---class 0 digits have red patches, class 1 digits have green patches. \textbf{Bottom row:} OOD test set (1\% correlation)---the color-label association is flipped.}
+    \label{fig:mnist_samples}
+\end{figure}
+
+\paragraph{Model architecture.} We use a simple CNN with the following architecture:
+\begin{itemize}[leftmargin=*]
+    \item Conv2D: 3 input channels $\to$ 32 filters, $3 \times 3$ kernel, padding 1
+    \item MaxPool2D: $2 \times 2$, output size $14 \times 14$
+    \item Conv2D: 32 $\to$ 64 filters, $3 \times 3$ kernel, padding 1
+    \item MaxPool2D: $2 \times 2$, output size $7 \times 7$
+    \item Flatten: $64 \times 7 \times 7 = 3136$ features
+    \item Linear: $3136 \to 128$ (with ReLU)
+    \item Linear: $128 \to 2$ (output logits)
+\end{itemize}
+
+Both layers are trainable. No dropout, batch normalization, weight decay, or any other explicit regularization is used. This isolates the \emph{implicit} bias of the optimizer.
+
+\paragraph{Training.} We train with:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{SGD:} Learning rate 0.01, momentum 0.9, no weight decay, 20 epochs, batch size 256.
+    \item \textbf{Adam:} Learning rate 0.001, default $\beta_1 = 0.9$, $\beta_2 = 0.999$, 20 epochs, batch size 256.
+\end{itemize}
+
+Both optimizers use cross-entropy loss. We use the same random seed for model initialization to ensure fair comparison. Both achieve near-perfect training accuracy by epoch 20 (SGD: 99.7\%, Adam: 100\%), confirming that both find interpolating solutions.
+
+\paragraph{Correlation strength sensitivity.} We initially ran this experiment with $p = 0.95$ (95\% correlation). At this level, the effect was present but modest: SGD OOD accuracy was 93.0\% vs.\ Adam OOD accuracy of 94.8\%---only a 1.8 percentage point gap. Increasing to $p = 0.99$ amplified the effect dramatically (30.2 point gap), because the stronger spurious correlation makes the shortcut nearly deterministic during training, leaving SGD with almost no incentive to learn digit shape. This sensitivity to correlation strength is itself an informative finding about the conditions under which simplicity bias manifests.
+
+\paragraph{Evaluation metrics.}
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{ID accuracy}: Test accuracy on data with 99\% spurious correlation.
+    \item \textbf{OOD accuracy}: Test accuracy with correlation flipped to 1\%.
+    \item \textbf{OOD drop}: Difference between ID and OOD accuracy. Larger drop = more reliance on the spurious feature.
+    \item \textbf{Patch reliance}: Accuracy drop when the colored patch is removed (zeroed out) at test time. Defined as: $\text{Patch reliance} = \text{Acc}(\text{with patch}) - \text{Acc}(\text{without patch})$. A model relying on the patch will show a large positive drop; a model using digit shape will show minimal change.
+\end{enumerate}
+
+All experiments are repeated across 5 random seeds.
+
+%-------------------------------------------------------------
+\subsection{Results}
+%-------------------------------------------------------------
+
+\begin{table}[h]
+\centering
+\caption{Experiment 2: MNIST with spurious colored patch (mean across 5 seeds). OOD Drop = ID $-$ OOD accuracy. Patch Reliance = accuracy change when patch is removed.}
+\label{tab:exp2}
+\begin{tabular}{lccccc}
+\toprule
+Optimizer & ID Acc. & OOD Acc. & No-Patch Acc. & OOD Drop & Patch Reliance \\
+\midrule
+SGD & 0.995 & 0.693 & 0.931 & \textbf{0.302} & \textbf{0.064} \\
+Adam & 0.998 & \textbf{0.861} & 0.976 & 0.136 & 0.022 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% >>> FIGURE: Insert fig10_id_vs_ood.png <<<
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/fig10_id_vs_ood.png}
+    \caption{ID vs.\ OOD accuracy for SGD and Adam. Both achieve near-perfect ID accuracy ($>99\%$), but SGD drops sharply to 69.3\% on OOD data while Adam maintains 86.1\%.}
+    \label{fig:id_ood}
+\end{figure}
+
+\paragraph{SGD drops dramatically on OOD data.} SGD achieves 99.5\% ID accuracy but only 69.3\% OOD accuracy---a 30.2 percentage point drop. When the spurious correlation is flipped, SGD's reliance on patch color causes systematic misclassification.
+
+\paragraph{Adam is substantially more robust.} Adam achieves 99.8\% ID accuracy and 86.1\% OOD accuracy---only a 13.6 point drop. Adam still uses the patch to some extent (its OOD accuracy is not 99\%), but it has also learned digit shape as a backup feature.
+
+\paragraph{Patch reliance confirms the mechanism.} When the colored patch is removed entirely at test time, SGD's accuracy drops by 6.4\% while Adam's drops by only 2.2\%. This means SGD relies approximately $3\times$ more on the spurious patch feature than Adam. This directly measures the difference in feature reliance between the two optimizers.
+
+% >>> FIGURE: Insert fig12_summary.png <<<
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/fig12_summary.png}
+    \caption{Summary of simplicity bias metrics across 5 seeds. SGD shows both larger OOD accuracy drop and higher patch reliance, consistent with latching onto the simple spurious feature.}
+    \label{fig:summary}
+\end{figure}
+
+\paragraph{Consistency across seeds.} Every seed shows Adam OOD accuracy $>$ SGD OOD accuracy, confirming this is a systematic difference rather than random variation.
+
+\paragraph{Interpretation.} These results are consistent with the theoretical framework:
+\begin{itemize}[leftmargin=*]
+    \item SGD's $\ell_2$ implicit bias concentrates representational capacity on the simplest predictive feature. The patch color is a near-perfect predictor during training (99\% correlation) and requires only detecting a color in a fixed location---a trivially simple, nearly linear feature. SGD allocates most of its capacity to this feature.
+    \item Adam's $\ell_\infty$ implicit bias spreads attention across feature coordinates, preventing the model from collapsing onto a single simple feature. This means Adam also learns digit shape patterns, even though they are harder to extract. When the patch becomes unreliable (OOD), Adam's richer representation provides a fallback.
+\end{itemize}
+
+%=============================================================
+\section{Discussion}
+\label{sec:discussion}
+%=============================================================
+
+%-------------------------------------------------------------
+\subsection{Summary of Findings}
+%-------------------------------------------------------------
+
+Our two experiments verify complementary predictions from the theoretical framework:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Experiment 1 (margin geometry):} GD and Adam converge to genuinely different solutions---$\ell_2$ and $\ell_\infty$ max-margin respectively---with cosine similarity $> 0.98$ to the exact solutions across 5 seeds. This confirms the steepest descent framework: the norm in which the optimizer operates determines the margin it maximizes.
+    
+    \item \textbf{Experiment 2 (practical consequence):} The margin geometry difference translates to a meaningful performance gap in the presence of spurious correlations. SGD's simplicity bias causes $3\times$ higher reliance on a spurious feature and approximately 17 percentage points worse OOD accuracy compared to Adam.
+\end{enumerate}
+
+%-------------------------------------------------------------
+\subsection{What We Tried That Did Not Work}
+%-------------------------------------------------------------
+
+During development, we explored several setups before finding one that clearly demonstrated simplicity bias: (1) \emph{Gaussian cluster data} with symmetric geometry---both optimizers learned identical boundaries; (2) \emph{synthetic 3D data} with a spurious linear feature $x_3$ correlated with a circular boundary---both optimizers relied equally on $x_3$ ($\approx$0.28 reliance); (3) \emph{Waterbirds benchmark} with pretrained ResNet-18---SGD achieved \emph{better} worst-group accuracy (0.509) than Adam (0.428), likely because pretrained features and weight decay masked the implicit bias difference. The MNIST colored patch experiment succeeded because it has the necessary ingredients: a truly simple spurious feature, a strong spurious correlation (99\%), and a simple model without pretrained features or explicit regularization.
+
+%-------------------------------------------------------------
+\subsection{Limitations}
+%-------------------------------------------------------------
+
+Several limitations should be noted: (1) \emph{Linear theory, nonlinear experiments}---Theorems~\ref{thm:soudry} and~\ref{thm:adam} are proven for linear models, while Experiment~2 uses a CNN; the connection is supported by Vasudeva et al.\ but not formally guaranteed. (2) \emph{Adam is not universally better}---the advantage appears when spurious features are simpler than true features; our Waterbirds results show SGD can outperform Adam in other settings. (3) \emph{Full-batch vs.\ stochastic}---Theorem~\ref{thm:adam} requires full-batch Adam; mini-batch noise introduces additional implicit regularization. (4) \emph{Effect strength depends on setup}---with 95\% correlation the effect was modest; with 99\% it was dramatic. (5) \emph{Single architecture}---results may vary with depth, normalization layers, and other architectural choices.
+
+%-------------------------------------------------------------
+\subsection{Connection to Course Material}
+%-------------------------------------------------------------
+
+This project connects to core APPM 5490 topics: \emph{PAC learning} (the implicit bias determines which hypothesis class the optimizer searches); \emph{Rademacher complexity and margin bounds} (different margin norms yield different generalization guarantees, Equation~\ref{eq:margin_bound}); \emph{SVM and max-margin classifiers} (the $\ell_2$ max-margin is the hard-margin SVM; our project introduces the $\ell_\infty$-SVM as the Adam analogue); and \emph{SGD convergence} (the steepest descent framework connects optimizer geometry to the optimization trajectory).
+
+%-------------------------------------------------------------
+\subsection{Future Work}
+%-------------------------------------------------------------
+
+Several directions emerge: (1) extending the margin convergence analysis to deep nonlinear networks; (2) characterizing when simplicity bias helps vs.\ hurts (our Waterbirds negative result highlights this need); (3) investigating other optimizers (AdaGrad, RMSProp, LAMB) through the steepest descent lens---each should correspond to a different norm and margin type; and (4) understanding how explicit regularization (weight decay, dropout) interacts with implicit bias.
+
+%=============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+%=============================================================
+
+We have presented a unified study of the implicit bias of gradient descent and Adam, connecting three recent theoretical results through the steepest descent framework and verifying their predictions empirically.
+
+Our central finding is that the choice of optimizer determines not just how fast a model converges, but \emph{what it converges to}. Gradient descent, as steepest descent in $\ell_2$, converges to the $\ell_2$-max-margin solution and exhibits simplicity bias. Adam, as approximate steepest descent in $\ell_\infty$, converges to the $\ell_\infty$-max-margin solution and learns richer features. In the presence of spurious correlations, this difference leads to a significant robustness gap: SGD drops 30.2\% on OOD data while Adam drops only 13.6\%.
+
+The practical implication is clear: \emph{the optimizer is not just a hyperparameter}---it is a design choice that shapes what a model learns, with direct consequences for robustness, fairness, and reliability in deployment.
+
+%=============================================================
+% REFERENCES
+%=============================================================
+
+\begin{thebibliography}{10}
+
+\bibitem{soudry2018}
+D.~Soudry, E.~Hoffer, M.S.~Nacson, S.~Gunasekar, and N.~Srebro.
+\newblock The implicit bias of gradient descent on separable data.
+\newblock \emph{Journal of Machine Learning Research}, 19(70):1--57, 2018.
+
+\bibitem{zhang2024}
+C.~Zhang, D.~Zou, and Y.~Cao.
+\newblock The implicit bias of {A}dam on separable data.
+\newblock \emph{arXiv preprint arXiv:2406.10650}, 2024.
+
+\bibitem{vasudeva2025}
+B.~Vasudeva, S.~Krishnamurthy, and C.~Thrampoulidis.
+\newblock The rich and the simple: On the implicit bias of {A}dam and {SGD}.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2025.
+
+\bibitem{gunasekar2018}
+S.~Gunasekar, J.~Lee, D.~Soudry, and N.~Srebro.
+\newblock Characterizing implicit bias in terms of optimization geometry.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2018.
+
+\bibitem{tsilivis2025}
+N.~Tsilivis, G.~Vardi, and J.~Kempe.
+\newblock Flavors of margin: Implicit bias of steepest descent in homogeneous neural networks.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2025.
+
+\bibitem{woodworth2020}
+B.~Woodworth, S.~Gunasekar, J.D.~Lee, E.~Moroshko, P.~Savarese, I.~Golan, D.~Soudry, and N.~Srebro.
+\newblock Kernel and rich regimes in overparameterized models.
+\newblock In \emph{Conference on Learning Theory (COLT)}, 2020.
+
+\bibitem{zhang2017understanding}
+C.~Zhang, S.~Bengio, M.~Hardt, B.~Recht, and O.~Vinyals.
+\newblock Understanding deep learning requires rethinking generalization.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2017.
+
+\bibitem{mohri2018}
+M.~Mohri, A.~Rostamizadeh, and A.~Talwalkar.
+\newblock \emph{Foundations of Machine Learning}.
+\newblock MIT Press, 2nd edition, 2018.
+
+\bibitem{shalev2014}
+S.~Shalev-Shwartz and S.~Ben-David.
+\newblock \emph{Understanding Machine Learning: From Theory to Algorithms}.
+\newblock Cambridge University Press, 2014.
+
+\bibitem{cvxpy}
+S.~Diamond and S.~Boyd.
+\newblock {CVXPY}: A {P}ython-embedded modeling language for convex optimization.
+\newblock \emph{Journal of Machine Learning Research}, 17(83):1--5, 2016.
+
+\end{thebibliography}
+
+%=============================================================
+\appendix
+\section{Implementation Details}
+\label{app:implementation}
+%=============================================================
+
+All code is in Python using PyTorch and CVXPY (SCS solver), available at \url{https://github.com/[username]/implicit-bias-adam-sgd}. Key choices: logistic loss uses \texttt{softplus} for numerical stability; GD uses manual gradient updates (not \texttt{torch.optim.SGD}) with zero momentum to match the theoretical full-batch setting; both models in Experiment~2 share the same \texttt{torch.manual\_seed} for identical initialization; no explicit regularization is used anywhere. Experiment~1 runs in $\sim$20 min on CPU (all 5 seeds); Experiment~2 in $\sim$10 min.
+
+\end{document}
