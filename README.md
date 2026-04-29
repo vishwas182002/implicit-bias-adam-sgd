@@ -1,6 +1,6 @@
 # Implicit Bias of Adam vs. SGD: Margin Geometry, Simplicity Bias, and Spurious Correlations
 
-**University of Colorado Boulder**  
+
 **Author: Vishwas K.**
 
 ---
@@ -66,7 +66,6 @@ pip install -r requirements.txt
 cd exp1_margin
 python run_experiment1.py
 ```
-- Runs in ~20 minutes on CPU
 - Generates 4 figures in `figures/`
 - Tests 5 dataset seeds
 
@@ -75,7 +74,6 @@ python run_experiment1.py
 cd exp2_mnist_patch
 python run_experiment2.py
 ```
-- Runs in ~10 minutes on CPU
 - MNIST downloads automatically on first run
 - Generates 4 figures in `figures/`
 - Tests 5 random seeds
