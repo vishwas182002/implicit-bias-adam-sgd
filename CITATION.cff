@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite this repository."
+title: "Implicit Bias of Adam vs. SGD: Margin Geometry, Simplicity Bias, and Spurious Correlations"
+authors:
+  - family-names: Kothari
+    given-names: Vishwas
+repository-code: "https://github.com/vishwas182002/implicit-bias-adam-sgd"
+date-released: "2026-04-28"
+license: MIT
